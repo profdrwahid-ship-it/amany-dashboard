@@ -669,4 +669,25 @@ def main():
         st.header("عرض حسب المنشأة")
         # التحقق من الاتصال أولاً
         if get_spreadsheet(PHC_SPREADSHEET_ID) is None:
-            st.error("❌ لا يمكن الاتصال بمصدر البيانات. ي
+            st.error("❌ لا يمكن الاتصال بمصدر البيانات. يرجى استخدام زر 'فحص الاتصال' للتأكد من الإعدادات.")
+            return
+            
+        try:
+            ws_list = list_facility_sheets(PHC_SPREADSHEET_ID)
+        except Exception as e:
+            st.error(f"تعذر قراءة قائمة الأوراق: {e}")
+            return
+        if not ws_list:
+            st.info("لا توجد منشآت متاحة.")
+            return
+        selected_ws = st.selectbox("اختر منشأة:", ws_list, index=0, key="fac_sel")
+        df_sel = get_df_from_sheet(PHC_SPREADSHEET_ID, selected_ws)
+        if df_sel.empty:
+            st.info("لا توجد بيانات في الورقة المحددة.")
+            return
+        display_facility_dashboard(df_sel, selected_ws, range_prefix="fac")
+    else:
+        compare_facilities()
+
+if __name__ == "__main__":
+    main()
