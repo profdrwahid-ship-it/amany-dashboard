@@ -96,11 +96,20 @@ h1,h2,h3,h4,h5,h6 { color: var(--green) !important; }
     unsafe_allow_html=True,
 )
 
-# ============ معرف ملف PHC ============
-PHC_SPREADSHEET_ID = (
-    st.secrets.get("sheets", {}).get("phc_spreadsheet_id", "")
-    or st.text_input("PHC Spreadsheet ID", value="1ptbPIJ9Z0k92SFcXNqAeC61SXNpamCm-dXPb97cPT_4")
+# ============ إعداد متعدد لملفات Google Sheets ============
+PHC_SPREADSHEETS = {
+    "البيانات الرئيسية": "1ptbPIJ9Z0k92SFcXNqAeC61SXNpamCm-dXPb97cPT_4"
+}
+
+# اختيار مصدر البيانات من الشريط الجانبي
+st.sidebar.header("📁 مصدر البيانات")
+selected_sheet_name = st.sidebar.selectbox(
+    "اختر مصدر البيانات:",
+    options=list(PHC_SPREADSHEETS.keys()),
+    index=0  # الأول هو الافتراضي
 )
+
+PHC_SPREADSHEET_ID = PHC_SPREADSHEETS[selected_sheet_name]
 
 # ============ Backoff ============
 def with_backoff(func, *args, **kwargs):
@@ -117,24 +126,58 @@ def with_backoff(func, *args, **kwargs):
 # ============ فتح الملف ============
 @st.cache_resource(ttl=7200)
 def get_spreadsheet(spreadsheet_id: str):
-    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
-    client = gspread.authorize(creds)
-    return with_backoff(client.open_by_key, spreadsheet_id)
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        
+        # التحقق من وجود الـ secrets
+        if "gcp_service_account" not in st.secrets:
+            st.error("❌ لم يتم العثور على إعدادات حساب الخدمة في Secrets")
+            return None
+            
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        spreadsheet = with_backoff(client.open_by_key, spreadsheet_id)
+        return spreadsheet
+        
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"❌ لم يتم العثور على ملف Google Sheet بالـ ID: {spreadsheet_id}")
+        st.info("🔍 تأكد من:")
+        st.info("1. أن الـ ID صحيح")
+        st.info("2. أن حساب الخدمة له صلاحية الوصول للشيت")
+        st.info("3. أن الشيت موجود ولم يتم حذفه")
+        return None
+    except Exception as e:
+        st.error(f"❌ خطأ في الاتصال بـ Google Sheets: {str(e)}")
+        return None
 
 # ============ قراءات ============
 @st.cache_data(ttl=900)
 def list_facility_sheets(spreadsheet_id: str):
     sh = get_spreadsheet(spreadsheet_id)
-    titles = [ws.title for ws in with_backoff(sh.worksheets)]
-    blacklist = {"config", "config!", "readme", "financial", "kpi", "test"}
-    return [t for t in titles if t.strip().lower() not in blacklist]
+    if sh is None:
+        return []
+    try:
+        titles = [ws.title for ws in with_backoff(sh.worksheets)]
+        blacklist = {"config", "config!", "readme", "financial", "kpi", "test"}
+        return [t for t in titles if t.strip().lower() not in blacklist]
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة قائمة الأوراق: {e}")
+        return []
 
 @st.cache_data(ttl=900)
 def get_all_values(spreadsheet_id: str, worksheet_name: str):
     sh = get_spreadsheet(spreadsheet_id)
-    ws = with_backoff(sh.worksheet, worksheet_name.strip())
-    return with_backoff(ws.get_all_values)
+    if sh is None:
+        return []
+    try:
+        ws = with_backoff(sh.worksheet, worksheet_name.strip())
+        return with_backoff(ws.get_all_values)
+    except gspread.exceptions.WorksheetNotFound:
+        st.error(f"❌ لم يتم العثور على الورقة: {worksheet_name}")
+        return []
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة البيانات: {e}")
+        return []
 
 @st.cache_data(ttl=900)
 def get_df_from_sheet(spreadsheet_id: str, worksheet_name: str) -> pd.DataFrame:
@@ -215,10 +258,29 @@ def apply_chart_layout(fig, title_txt: str = "", height: int = 600):
         paper_bgcolor="#0b1020",
         plot_bgcolor="#0b1020",
         font=dict(color="#ffffff", size=16),
-        title_font=dict(size=22, color="#39ff14"),
-        legend=dict(font=dict(size=14), bgcolor="rgba(0,0,0,0)"),
-        xaxis=dict(gridcolor="#233", zerolinecolor="#355", title_font=dict(size=18, color="#ffffff"), tickfont=dict(size=14, color="#ffffff")),
-        yaxis=dict(gridcolor="#233", zerolinecolor="#355", title_font=dict(size=18, color="#ffffff"), tickfont=dict(size=14, color="#ffffff")),
+        title_font=dict(size=22, color="#39ff14", family="Arial, sans-serif"),
+        legend=dict(
+            font=dict(size=16, color="#39ff14", family="Arial, sans-serif", weight="bold"),
+            bgcolor="rgba(11, 16, 32, 0.8)",
+            bordercolor="#39ff14",
+            borderwidth=2,
+            x=0.01,
+            y=0.99,
+            xanchor="left",
+            yanchor="top"
+        ),
+        xaxis=dict(
+            gridcolor="#233", 
+            zerolinecolor="#355", 
+            title_font=dict(size=18, color="#39ff14", family="Arial, sans-serif"),
+            tickfont=dict(size=14, color="#ffffff", family="Arial, sans-serif")
+        ),
+        yaxis=dict(
+            gridcolor="#233", 
+            zerolinecolor="#355", 
+            title_font=dict(size=18, color="#39ff14", family="Arial, sans-serif"),
+            tickfont=dict(size=14, color="#ffffff", family="Arial, sans-serif")
+        ),
         margin=dict(l=40, r=20, t=60, b=50),
     )
     return fig
@@ -238,9 +300,54 @@ def display_trend_analysis(df: pd.DataFrame, date_col: str, service_col: str):
     p = np.poly1d(z)
     trend = p(data["day_num"])
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data[date_col], y=y, mode="lines+markers", name="Actual", line=dict(color=CHART_COLORS[0], width=3)))
-    fig.add_trace(go.Scatter(x=data[date_col], y=trend, mode="lines", name="Trend", line=dict(color=CHART_COLORS[1], dash="dash", width=3)))
-    apply_chart_layout(fig, f"Trend: {service_col}", height=620)
+    fig.add_trace(go.Scatter(
+        x=data[date_col], 
+        y=y, 
+        mode="lines+markers", 
+        name="القيم الفعلية", 
+        line=dict(color=CHART_COLORS[0], width=3),
+        marker=dict(size=8, color=CHART_COLORS[0])
+    ))
+    fig.add_trace(go.Scatter(
+        x=data[date_col], 
+        y=trend, 
+        mode="lines", 
+        name="خط الاتجاه", 
+        line=dict(color=CHART_COLORS[1], dash="dash", width=3)
+    ))
+    
+    # تطبيق التنسيق المحسن
+    fig.update_layout(
+        title=f"تحليل الاتجاه: {service_col}",
+        height=620,
+        paper_bgcolor="#0b1020",
+        plot_bgcolor="#0b1020",
+        font=dict(color="#ffffff", size=16),
+        title_font=dict(size=22, color="#39ff14", family="Arial, sans-serif"),
+        legend=dict(
+            font=dict(size=16, color="#39ff14", family="Arial, sans-serif", weight="bold"),
+            bgcolor="rgba(11, 16, 32, 0.9)",
+            bordercolor="#39ff14",
+            borderwidth=2,
+            x=0.01,
+            y=0.99,
+            xanchor="left",
+            yanchor="top"
+        ),
+        xaxis=dict(
+            gridcolor="#233", 
+            zerolinecolor="#355", 
+            title_font=dict(size=18, color="#39ff14", family="Arial, sans-serif"),
+            tickfont=dict(size=14, color="#ffffff", family="Arial, sans-serif")
+        ),
+        yaxis=dict(
+            gridcolor="#233", 
+            zerolinecolor="#355", 
+            title_font=dict(size=18, color="#39ff14", family="Arial, sans-serif"),
+            tickfont=dict(size=14, color="#ffffff", family="Arial, sans-serif")
+        ),
+        margin=dict(l=40, r=20, t=60, b=50),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # ============ فلتر تاريخ موحد ============
@@ -298,7 +405,7 @@ def display_facility_dashboard(df: pd.DataFrame, facility_name: str, range_prefi
     if ins:
         st.markdown('<div class="subtitle">ملخص ذكي</div>', unsafe_allow_html=True)
         if ins.get("best"): st.success(f"أعلى تحسن: {ins['best'][0]} ({ins['best'][1]:+.1f}%)")
-        if ins.get("worst"): st.error(f"أكبر تراجع: {ins['worst']} ({ins['worst'][1]:+.1f}%)")
+        if ins.get("worst"): st.error(f"أكبر تراجع: {ins['worst'][0]} ({ins['worst'][1]:+.1f}%)")
         alerts = ins.get("alerts")
         if isinstance(alerts, pd.Series) and not alerts.empty:
             st.info("تنبيهات ±20%:")
@@ -317,9 +424,26 @@ def display_facility_dashboard(df: pd.DataFrame, facility_name: str, range_prefi
         clinic_totals = df_filtered[clinic_cols].sum(numeric_only=True)
         if len(clinic_totals):
             fig_pie = px.pie(values=clinic_totals.values, names=clinic_totals.index, hole=0.3, color_discrete_sequence=CHART_COLORS)
-            fig_pie.update_traces(textposition="outside", textinfo="percent+value", textfont=dict(color="#ffffff", size=18, family="Arial, bold"),
-                                  pull=[0.03]*len(clinic_totals), marker=dict(line=dict(color="#ffffff", width=2)))
-            apply_chart_layout(fig_pie, "نسبة تردد العيادات", height=580)
+            fig_pie.update_traces(
+                textposition="outside", 
+                textinfo="percent+value", 
+                textfont=dict(color="#ffffff", size=16, family="Arial, bold"),
+                pull=[0.03]*len(clinic_totals), 
+                marker=dict(line=dict(color="#ffffff", width=2))
+            )
+            # تطبيق التنسيق المحسن على pie chart
+            fig_pie.update_layout(
+                paper_bgcolor="#0b1020",
+                plot_bgcolor="#0b1020",
+                font=dict(color="#ffffff", size=14),
+                legend=dict(
+                    font=dict(size=14, color="#39ff14", family="Arial, sans-serif", weight="bold"),
+                    bgcolor="rgba(11, 16, 32, 0.8)",
+                    bordercolor="#39ff14",
+                    borderwidth=2
+                ),
+                title_font=dict(size=20, color="#39ff14", family="Arial, sans-serif")
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
             st.info("لا توجد أعمدة تردد العيادات (الأعمدة 2 إلى 7).")
@@ -328,9 +452,19 @@ def display_facility_dashboard(df: pd.DataFrame, facility_name: str, range_prefi
         st.subheader("خدمات الأسنان")
         dental_totals = df_filtered[dental_cols].sum(numeric_only=True)
         if len(dental_totals):
-            fig_bar = px.bar(y=dental_totals.index, x=dental_totals.values, orientation="h",
-                             labels={"y": "الخدمة", "x": "الإجمالي"}, text_auto=True, color_discrete_sequence=CHART_COLORS)
-            fig_bar.update_traces(textfont=dict(size=16, color="#ffffff"), marker_line_width=1.2, marker_line_color="#888")
+            fig_bar = px.bar(
+                y=dental_totals.index, 
+                x=dental_totals.values, 
+                orientation="h",
+                labels={"y": "الخدمة", "x": "الإجمالي"}, 
+                text_auto=True, 
+                color_discrete_sequence=CHART_COLORS
+            )
+            fig_bar.update_traces(
+                textfont=dict(size=14, color="#ffffff", family="Arial, bold"), 
+                marker_line_width=1.2, 
+                marker_line_color="#888"
+            )
             apply_chart_layout(fig_bar, "إجمالي خدمات الأسنان", height=580)
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
@@ -359,11 +493,25 @@ def display_facility_dashboard(df: pd.DataFrame, facility_name: str, range_prefi
     if selected:
         if len(selected) > 1:
             if chart_kind_local == "Line":
-                fig_line = px.line(df_filtered, x=date_col, y=selected, markers=True, title="مقارنة أداء الخدمات المختارة", color_discrete_sequence=CHART_COLORS)
+                fig_line = px.line(
+                    df_filtered, 
+                    x=date_col, 
+                    y=selected, 
+                    markers=True, 
+                    title="مقارنة أداء الخدمات المختارة", 
+                    color_discrete_sequence=CHART_COLORS
+                )
                 apply_chart_layout(fig_line, height=620)
                 st.plotly_chart(fig_line, use_container_width=True)
             else:
-                fig_bar2 = px.bar(df_filtered, x=date_col, y=selected, barmode="group", title="مقارنة أداء الخدمات المختارة", color_discrete_sequence=CHART_COLORS)
+                fig_bar2 = px.bar(
+                    df_filtered, 
+                    x=date_col, 
+                    y=selected, 
+                    barmode="group", 
+                    title="مقارنة أداء الخدمات المختارة", 
+                    color_discrete_sequence=CHART_COLORS
+                )
                 apply_chart_layout(fig_bar2, height=620)
                 st.plotly_chart(fig_bar2, use_container_width=True)
         else:
@@ -444,9 +592,22 @@ def compare_facilities():
             continue
         seg[dcol] = pd.to_datetime(seg[dcol]).dt.normalize()
         if chart_kind == "Line":
-            fig.add_trace(go.Scatter(x=seg[dcol], y=seg[kpi], mode="lines+markers", name=w, line=dict(width=3)))
+            fig.add_trace(go.Scatter(
+                x=seg[dcol], 
+                y=seg[kpi], 
+                mode="lines+markers", 
+                name=w, 
+                line=dict(width=3),
+                marker=dict(size=6)
+            ))
         else:
-            fig.add_trace(go.Bar(x=seg[dcol], y=seg[kpi], name=w, marker_line_width=1.2, marker_line_color="#888"))
+            fig.add_trace(go.Bar(
+                x=seg[dcol], 
+                y=seg[kpi], 
+                name=w, 
+                marker_line_width=1.2, 
+                marker_line_color="#888"
+            ))
 
     apply_chart_layout(fig, f"{kpi} عبر منشآت", height=650)
     days_span = (end_sel - start_sel).days
@@ -474,8 +635,31 @@ def main():
     st.sidebar.title("عرض البيانات")
     app_mode = st.sidebar.radio("اختر العرض:", ("الإجماليات", "حسب المنشأة", "مقارنة منشآت"), key="mode")
 
+    # التحقق من اتصال Google Sheets أولاً
+    st.sidebar.markdown("---")
+    st.sidebar.header("🔗 حالة الاتصال")
+    
+    if st.sidebar.button("فحص الاتصال بمصدر البيانات"):
+        with st.sidebar:
+            with st.spinner("جاري فحص الاتصال..."):
+                sh = get_spreadsheet(PHC_SPREADSHEET_ID)
+                if sh is not None:
+                    st.success("✅ الاتصال ناجح")
+                    try:
+                        worksheets = list_facility_sheets(PHC_SPREADSHEET_ID)
+                        st.info(f"📊 عدد الأوراق: {len(worksheets)}")
+                    except:
+                        st.info("📊 يمكن قراءة البيانات")
+                else:
+                    st.error("❌ فشل الاتصال")
+
     if app_mode == "الإجماليات":
         st.header("لوحة التحكم الرئيسية (الإجماليات)")
+        # التحقق من الاتصال قبل محاولة قراءة البيانات
+        if get_spreadsheet(PHC_SPREADSHEET_ID) is None:
+            st.error("❌ لا يمكن الاتصال بمصدر البيانات. يرجى استخدام زر 'فحص الاتصال' للتأكد من الإعدادات.")
+            return
+            
         df_phc = get_df_from_sheet(PHC_SPREADSHEET_ID, "PHC Dashboard")
         if not df_phc.empty:
             display_facility_dashboard(df_phc, "PHC Dashboard", range_prefix="main")
@@ -483,22 +667,6 @@ def main():
             st.info("لم يتم العثور على بيانات صالحة في PHC Dashboard.")
     elif app_mode == "حسب المنشأة":
         st.header("عرض حسب المنشأة")
-        try:
-            ws_list = list_facility_sheets(PHC_SPREADSHEET_ID)
-        except Exception as e:
-            st.error(f"تعذر قراءة قائمة الأوراق: {e}")
-            return
-        if not ws_list:
-            st.info("لا توجد منشآت متاحة.")
-            return
-        selected_ws = st.selectbox("اختر منشأة:", ws_list, index=0, key="fac_sel")
-        df_sel = get_df_from_sheet(PHC_SPREADSHEET_ID, selected_ws)
-        if df_sel.empty:
-            st.info("لا توجد بيانات في الورقة المحددة.")
-            return
-        display_facility_dashboard(df_sel, selected_ws, range_prefix="fac")
-    else:
-        compare_facilities()
-
-if __name__ == "__main__":
-    main()
+        # التحقق من الاتصال أولاً
+        if get_spreadsheet(PHC_SPREADSHEET_ID) is None:
+            st.error("❌ لا يمكن الاتصال بمصدر البيانات. ي
